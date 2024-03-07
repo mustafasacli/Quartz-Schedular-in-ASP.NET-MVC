@@ -1,0 +1,97 @@
+Scheduler infrastructure can be based on database. Database table schema can be like this;
+* tbl_scheduling_server
+----------------------------
+-id (identity column) (int8 serial)
+-server_address (server ip address) (varchar2(15) not null)
+-old_id (old record id after update) (int8 null)
+-is_deleted (is record active) (boolean not null default true)
+-created_at (record creation time)(timestamp not null)
+-created_by (user who added record.) (int8 not null OR varchar2(50) not null)
+-updated_at (record update time)(timestamp null)
+-updated_by (user who updated record.) (int8 null OR varchar2(50) null)
+
+* tbl_scheduling_setting
+--------------------------
+-id (identity column) (int8 serial)
+-server_address_id (tbl_scheduling_server record id for setting)(int8 not null)
+-task_type_assembly_name (assembly name for type that create task) varchar2(200) not null
+-task_type_name (type name for that create task) varchar2(100) not null
+-identity_name (identity name for scheduling) varchar2(100) not null
+-identity_group_name (identity group name for scheduling) varchar2(100) not null
+-trigger_name (trigger name for scheduling) varchar2(100) not null
+-trigger_group_name (trigger group name for scheduling) varchar2(100) not null
+-cron_schedule_expression (cron expression for scheduling) varchar2(100) not null
+-old_id (old record id after update) (int8 null)
+-is_deleted (is record active) (boolean not null default true)
+-created_at (record creation time)(timestamp not null)
+-created_by (user who added record.) (int8 not null OR varchar2(50) not null)
+-updated_at (record update time)(timestamp null)
+-updated_by (user who updated record.) (int8 null OR varchar2(50) null)
+
+SchedulerService code can be like this;
+public static async System.Threading.Tasks.Task StartAsync()
+try
+{
+var scheduler = await StdSchedulerFactory.GetDefaultScheduler();
+if (!scheduler.IsStarted)
+{
+await scheduler.Start();
+}
+string ipAdress = string.Empty;
+
+try
+{
+var host = Dns.GetHostEntry(Dns.GetHostName());
+ipAdress =
+host.AddressList
+.FirstOrDefault(q => q.AddressFamily == AddressFamily.InterNetwork)?.ToString() ?? string.Empty;
+}
+catch (Exception e)
+{
+// Exception handling
+}
+
+  if(ipAdress == ":::1" || ipAdress == "::1")
+    ipAdress = string.Empty;
+
+// Get List<tbl_scheduling_setting> for given ipAdress.
+List<tbl_scheduling_setting> resultSet=GetSchedulingSettingsForServer(ipAdress);
+foreach(tbl_scheduling_setting setting in resultSet)
+{
+try
+{
+  Assembly scheduleAssembly = Assembly.Load(setting.task_type_assembly_name);
+  var registrations = scheduleAssembly.GetExportedTypes()
+                      .Where(type => type.IsClass && !type.IsAbstract
+                && type.BaseType.IsGenericType
+                // && type.BaseType.GetGenericTypeDefinition() == typeof(SI.CommandHandler.Base.BaseCommandHandler<,>)
+                && type.GetInterfaces().LastOrDefault().GetGenericTypeDefinition() == typeof(IJob)
+                && (type.BaseType.GetGenericArguments() ?? new Type[0]).Length == 2)
+                .ToList();
+            if ((registrations?.Count ?? 0) != 1)
+                return;
+  
+  var job = JobBuilder.Create(registrations.FirstOrDefault())
+                    .WithIdentity(setting.identity_name, setting.identity_group_name)
+                    .Build();
+                var trigger = TriggerBuilder.Create()
+                    .WithIdentity(setting.trigger_name, setting.trigger_group_name)
+                    .WithCronSchedule(setting.cron_schedule_expression)
+                    .Build();
+                await scheduler.ScheduleJob(job, trigger);
+}
+catch (Exception ex)
+{  
+// Exception handling
+}  
+}
+}
+catch (Exception ex)
+{  
+// Exception handling
+}
+}
+
+// Additional info; should be added basic_job for iis reset operation after server setting changes.
+
+            
